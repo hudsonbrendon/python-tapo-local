@@ -1,0 +1,43 @@
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[project]
+name = "python-tapo-local"
+version = "0.1.0"
+description = "Local (and optional cloud) client for TP-Link Tapo cameras, built from reverse engineering the Tapo app"
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+requires-python = ">=3.12"
+authors = [{ name = "Hudson Brendon", email = "contato.hudsonbrendon@gmail.com" }]
+keywords = ["tapo", "tp-link", "camera", "c200", "home-assistant", "reverse-engineering"]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Intended Audience :: Developers",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Programming Language :: Python :: 3.14",
+  "Topic :: Home Automation",
+]
+dependencies = ["pytapo>=3.4.30", "aiohttp>=3.9"]
+
+[project.urls]
+Homepage = "https://github.com/hudsonbrendon/python-tapo-local"
+Repository = "https://github.com/hudsonbrendon/python-tapo-local"
+Issues = "https://github.com/hudsonbrendon/python-tapo-local/issues"
+
+[dependency-groups]
+dev = ["pytest>=8.3", "pytest-asyncio>=0.25"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["tapolocal"]
+
+[tool.hatch.build.targets.sdist]
+include = ["tapolocal", "tests", "README.md", "LICENSE"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
