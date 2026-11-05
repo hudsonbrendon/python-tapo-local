@@ -27,9 +27,9 @@ cam.call("setLedStatus", {"led": {"config": {"enabled": "off"}}})
 - Requests are batched through `multipleRequest`. Methods the firmware doesn't support
   (`-40209`) are skipped.
 - Login is attempted **at most twice** per call. Every wrong password counts toward the
-  camera's 30‑minute lockout, so `TapoAuthError` is raised and it never loops. Errors that
-  carry a camera error code (for example `-40214` when a C200 v3 is busy) keep the session
-  alive instead of logging in again.
+  camera's 30‑minute lockout, so `TapoAuthError` is raised and it never loops. A session the
+  camera has invalidated (`-40214` on a C200 v3, `-40401`) is replaced by one fresh login and
+  the call is repeated. Other camera error codes keep the session.
 - Writes use `set<X> {module: {section: {field: value}}}`, the same shape as the matching
   getter. Some C200 quirks: `setDayNightModeConfig` requires `"chn_id": ["1"]`,
   `setFirmwareAutoUpgradeConfig` requires `time` and `random_range`, brightness is only

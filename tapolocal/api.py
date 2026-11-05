@@ -78,6 +78,10 @@ class TapoAuthError(Exception):
     """Senha errada ou câmera em suspensão temporária (lockout de 30 min)."""
 
 
+class TapoSessionLost(Exception):
+    """A câmera invalidou a sessão (-40214/-40401): basta um login novo."""
+
+
 class TapoCommandError(Exception):
     def __init__(self, method: str, code) -> None:
         super().__init__(f"{method} falhou: {code}")
@@ -89,8 +93,8 @@ class TapoLocal:
 
     Login = usuário `admin` + senha da conta TP-Link (igual ao app/tapo_control).
     No máximo 1 nova tentativa de login: cada senha errada conta pro lockout
-    de 30 min da câmera, mas a C200 fw 1.9.1 às vezes recusa um login logo
-    depois de outro (ex.: tapo_control entrando no mesmo segundo).
+    de 30 min da câmera, mas a C200 fw 1.9.1 às vezes recusa um login bom e
+    aceita o seguinte.
     """
 
     def __init__(self, host: str, password: str) -> None:
@@ -117,37 +121,41 @@ class TapoLocal:
     def _multi(self, queries: list[tuple[str, dict]]) -> dict[str, Any]:
         try:
             return self._multi_once(queries)
+        except TapoSessionLost:
+            return self._multi_once(queries)  # já descartou a sessão: login novo na hora
         except TapoAuthError:
             time.sleep(3)
             return self._multi_once(queries)
 
     def _multi_once(self, queries: list[tuple[str, dict]]) -> dict[str, Any]:
         with self._lock:
-            return self._multi_locked(queries)
+            out: dict[str, Any] = {}
+            for i in range(0, len(queries), BATCH):
+                chunk = queries[i : i + BATCH]
+                resp = self._request({
+                    "method": "multipleRequest",
+                    "params": {"requests": [{"method": m, "params": p} for m, p in chunk]},
+                })
+                for r in resp["result"]["responses"]:
+                    if r.get("error_code") == 0:
+                        out[r["method"]] = r.get("result", {})
+            return out
 
-    def _multi_locked(self, queries: list[tuple[str, dict]]) -> dict[str, Any]:
-        out: dict[str, Any] = {}
-        for i in range(0, len(queries), BATCH):
-            chunk = queries[i : i + BATCH]
-            try:
-                resp = self._client().performRequest(
-                    {
-                        "method": "multipleRequest",
-                        "params": {"requests": [{"method": m, "params": p} for m, p in chunk]},
-                    }
-                )
-            except Exception as err:
-                # Erro com código da câmera (ex.: -40214, a C200 v3 ocupada) mantém a sessão;
-                # só auth/rede pedem login novo — relogar à toa empurra pro lockout de 30 min.
-                if _is_auth(err) or "Response:" not in str(err):
-                    self._tapo = None
-                if _is_auth(err):
-                    raise TapoAuthError(str(err)) from err
-                raise
-            for r in resp["result"]["responses"]:
-                if r.get("error_code") == 0:
-                    out[r["method"]] = r.get("result", {})
-        return out
+    def _request(self, body: dict) -> dict:
+        """Uma requisição; traduz erros e decide se a sessão ainda presta (chamar com o lock)."""
+        try:
+            return self._client().performRequest(body)
+        except Exception as err:
+            msg = str(err)
+            # Com código da câmera a sessão segue válida, exceto os de sessão perdida. Sem
+            # código (rede/auth) ela também não é confiável: o próximo acesso faz login.
+            if _is_auth(err) or "Response:" not in msg or _session_lost(msg):
+                self._tapo = None
+            if _is_auth(err):
+                raise TapoAuthError(msg) from err
+            if _session_lost(msg):
+                raise TapoSessionLost(msg) from err
+            raise
 
     def device_info(self) -> dict:
         """basic_info da câmera (modelo, firmware, MAC, alias) — valida login."""
@@ -155,18 +163,22 @@ class TapoLocal:
 
     def call(self, method: str, params: dict) -> dict:
         """Executa um set*/do* e devolve a resposta (levanta se error_code != 0)."""
-        with self._lock:
-            resp = self._client().performRequest(
-                {"method": "multipleRequest", "params": {"requests": [{"method": method, "params": params}]}}
-            )["result"]["responses"][0]
+        body = {"method": "multipleRequest", "params": {"requests": [{"method": method, "params": params}]}}
+        resp = self._retrying(body)["result"]["responses"][0]
         if resp.get("error_code") != 0:
             raise TapoCommandError(method, resp.get("error_code"))
         return resp.get("result", {})
 
     def legacy(self, body: dict) -> dict:
         """Formato antigo {"method": "do"/"set", ...} — a sirene da C200 só aceita assim."""
+        return self._retrying(body)
+
+    def _retrying(self, body: dict) -> dict:
         with self._lock:
-            return self._client().performRequest(body)
+            try:
+                return self._request(body)
+            except TapoSessionLost:
+                return self._request(body)
 
     def fetch_live(self) -> dict[str, Any]:
         now = int(time.time())
@@ -206,6 +218,12 @@ class TapoLocal:
         data.update(self._multi(history))
         data["_fetched_at"] = now
         return data
+
+
+def _session_lost(msg: str) -> bool:
+    # -40214 não está no app nem no pytapo; observado na C200 v3 fw 1.9.1: a sessão antiga
+    # passa a responder só isso enquanto um login novo, do mesmo IP, funciona na hora.
+    return "-40214" in msg or "-40401" in msg
 
 
 def _is_auth(err: Exception) -> bool:

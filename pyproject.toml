@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "python-tapo-local"
-version = "0.1.0"
+version = "0.1.1"
 description = "Local (and optional cloud) client for TP-Link Tapo cameras, built from reverse engineering the Tapo app"
 readme = "README.md"
 license = "MIT"

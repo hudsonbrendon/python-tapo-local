@@ -42,8 +42,8 @@ def test_batches_and_skips_unsupported():
     assert sum(map(len, fake.calls)) == len(api.LOCAL_QUERIES)
 
 
-def test_camera_error_keeps_session_network_error_drops_it():
-    loc = local_with(FakeTapo({"getDeviceInfo": Exception('Error: -40214, Response: {"error_code": -40214}')}))
+def test_other_camera_error_keeps_session_network_error_drops_it():
+    loc = local_with(FakeTapo({"getDeviceInfo": Exception('Error: -40210, Response: {"error_code": -40210}')}))
     with pytest.raises(Exception):
         loc._multi_once([api.LOCAL_QUERIES[0]])
     assert loc._tapo is not None  # sem relogin à toa
@@ -51,6 +51,45 @@ def test_camera_error_keeps_session_network_error_drops_it():
     with pytest.raises(ConnectionError):
         loc._multi_once([api.LOCAL_QUERIES[0]])
     assert loc._tapo is None
+
+
+def stale_then_fresh(monkeypatch, loc, fresh):
+    """Sessão atual responde -40214; o próximo login entrega `fresh`."""
+    logins = []
+
+    def client():
+        if loc._tapo is None:
+            logins.append(1)
+            loc._tapo = fresh
+        return loc._tapo
+
+    monkeypatch.setattr(loc, "_client", client)
+    return logins
+
+
+def test_lost_session_relogs_once_and_recovers(monkeypatch):
+    stale = Exception('Error: -40214, Response: {"error_code": -40214}')
+    loc = local_with(FakeTapo({"getDeviceInfo": stale}))
+    logins = stale_then_fresh(monkeypatch, loc, FakeTapo({"getDeviceInfo": {"device_info": {"basic_info": {"mac": "AA"}}}}))
+    assert loc.device_info() == {"mac": "AA"}
+    assert len(logins) == 1
+
+
+def test_lost_session_on_write_recovers(monkeypatch):
+    stale = Exception('Error: -40214, Response: {"error_code": -40214}')
+    loc = local_with(FakeTapo({"setLedStatus": stale}))
+    logins = stale_then_fresh(monkeypatch, loc, FakeTapo({"setLedStatus": {}}))
+    assert loc.call("setLedStatus", {"led": {"config": {"enabled": "off"}}}) == {}
+    assert len(logins) == 1
+
+
+def test_lost_session_never_loops(monkeypatch):
+    stale = Exception('Error: -40214, Response: {"error_code": -40214}')
+    loc = local_with(FakeTapo({"getDeviceInfo": stale}))
+    logins = stale_then_fresh(monkeypatch, loc, FakeTapo({"getDeviceInfo": stale}))
+    with pytest.raises(tapolocal.TapoSessionLost):
+        loc.device_info()
+    assert len(logins) == 1
 
 
 def test_auth_error_retries_once(monkeypatch):
